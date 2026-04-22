@@ -1,171 +1,210 @@
-# Self-Pruning Neural Network for CIFAR-10
-
-This project implements a **self-pruning convolutional neural network** that learns to remove unnecessary connections during training using **differentiable gating and sparsity regularization**.
-
-Unlike traditional pruning methods applied after training, this approach enables the model to **adapt its architecture dynamically**, improving efficiency while maintaining competitive accuracy.
-
----
+# Self-Pruning Neural Network with Learnable Gates
 
 ## Overview
 
-Each weight in the prunable layers is paired with a learnable gate:
+This project implements a self-pruning neural network for image classification on CIFAR-10. The model learns both its weights and its structure simultaneously by associating each connection with a learnable gate. During training, these gates are optimized to suppress unimportant connections, resulting in a sparse and efficient network.
 
-```
+Unlike traditional pruning methods applied after training, this approach integrates pruning directly into the optimization process.
+
+---
+
+## Key Idea
+
+Each weight in the fully connected layers is paired with a learnable gate:
+
 w_eff = w × sigmoid(g)
-```
 
-* `sigmoid(g)` acts as a soft gate in the range (0, 1)
-* When the gate approaches 0, the corresponding connection is effectively pruned
-* Gates are optimized jointly with weights using gradient descent
+* The sigmoid function maps gate scores to (0, 1)
+* Values close to 0 effectively remove the connection
+* Values close to 1 retain the connection
 
----
+The model is trained with a combined objective:
 
-## Architecture
+L = CrossEntropyLoss + λ × SparsityLoss
 
-```
-Input (3×32×32)
-   │
-   ├── CNN Backbone (Conv → BatchNorm → ReLU)
-   │       ├── Stage 1 → MaxPool
-   │       ├── Stage 2 → MaxPool
-   │       └── Stage 3 → AvgPool
-   │
-   └── Prunable Classifier
-           ├── PrunableLinear(2048 → 512)
-           ├── PrunableLinear(512 → 256)
-           └── PrunableLinear(256 → 10)
-```
+Where:
 
-Pruning is applied only to the fully connected layers, where parameter density is highest and pruning is most effective.
+* CrossEntropyLoss ensures classification accuracy
+* SparsityLoss encourages gates to move toward zero
 
 ---
 
-## Loss Function
+## Sparsity Mechanism
 
-```
-L = CE + λ × mean(sigmoid(g))
-```
+A log-based sparsity penalty is used:
 
-* `CE` is the cross-entropy loss
-* `λ` controls sparsity strength
-* `mean(sigmoid(g))` encourages gates to move toward zero
+SparsityLoss = mean( -log(1 - sigmoid(g) + ε) )
 
-### Key Design Choice: Normalized Sparsity Loss
+This formulation:
 
-The sparsity term is computed as the **mean** of gate activations instead of the sum.
+* Applies stronger gradients to large gate values
+* Avoids vanishing gradients seen in standard L1 penalties
+* Encourages a bimodal distribution (near 0 or 1)
 
-This ensures:
+---
 
-* Comparable scale between classification and sparsity losses
-* Stable gradients
-* Effective control of pruning via λ
+## Model Architecture
+
+The model consists of:
+
+* A CNN feature extractor (Conv + BatchNorm + ReLU)
+* A prunable fully connected classifier
+
+Structure:
+
+* Convolutional backbone (3 stages)
+* Flatten layer
+* PrunableLinear (2048 → 512)
+* PrunableLinear (512 → 256)
+* PrunableLinear (256 → 10)
+
+Only the fully connected layers are pruned, as they contain the majority of parameters.
+
+Implementation details: 
 
 ---
 
 ## Training Pipeline
 
-### Phase 1: Soft Training
+The training process is divided into three phases:
 
-* Gates remain continuous in (0, 1)
-* λ is gradually increased (curriculum sparsity)
-* Model learns useful features before pruning begins
+### 1. Soft-Gate Training
 
-### Phase 2: Hard Thresholding
+* Gates are continuous (0–1)
+* Sparsity penalty is gradually introduced using a λ schedule
+* The model learns both features and connection importance
 
-* Gates below threshold τ are set to zero
-* Produces an explicitly sparse model
+### 2. Hard Pruning
 
-### Phase 3: Fine-Tuning
+* Gates below a threshold τ are set to zero
+* Corresponding weights are permanently disabled
 
-* Retraining with λ = 0
-* Recovers accuracy lost due to pruning
+### 3. Fine-Tuning
 
----
+* Training continues with λ = 0
+* Helps recover any accuracy lost during pruning
 
-## Experimental Results
-
-| λ    | Test Accuracy | Sparsity | MAC Reduction |
-| ---- | ------------- | -------- | ------------- |
-| 0.01 | 85.4%         | 8.1%     | 8.1%          |
-| 0.10 | 80.9%         | 32.1%    | 32.1%         |
-| 0.40 | 72.8%         | 67.9%    | 67.9%         |
-
-### Observations
-
-* Increasing λ increases sparsity while reducing accuracy
-* Gate distributions become bimodal, indicating clear pruning decisions
-* Fine-tuning recovers performance after hard pruning
-* A balanced trade-off is achieved at moderate λ values
+Implementation details: 
 
 ---
 
-## Key Contributions
+## Lambda Scheduling
 
-* Differentiable pruning using learnable gates
-* Normalized sparsity loss to resolve loss-scale imbalance
-* Curriculum-based λ scheduling for stable training
-* Three-phase pruning pipeline (soft → hard → fine-tune)
-* Empirical validation with accuracy-sparsity trade-off
+λ is gradually increased during early training:
+
+* Prevents premature pruning
+* Allows the model to first learn useful representations
+
+Typical schedule:
+
+* Warm-up phase: λ increases linearly
+* Later epochs: λ remains constant
+
+Implementation: 
+
+---
+
+## Dataset
+
+* CIFAR-10 (50,000 training, 10,000 test samples)
+* Data augmentation:
+
+  * Random crop
+  * Horizontal flip
+  * Color jitter
+
+Loader implementation: 
+
+---
+
+## Experiments
+
+Three levels of sparsity were evaluated:
+
+| λ Value | Behavior           |
+| ------- | ------------------ |
+| 0.01    | Light pruning      |
+| 0.10    | Moderate pruning   |
+| 0.40    | Aggressive pruning |
+
+Each experiment follows the full pipeline:
+training → pruning → fine-tuning
+
+Entry point: 
+
+---
+
+## Metrics Reported
+
+* Test Accuracy
+* Sparsity (% of pruned connections)
+* MAC Reduction (theoretical compute savings)
+* Accuracy before and after pruning
+
+---
+
+## Results Summary
+
+* Increasing λ leads to higher sparsity
+* Higher sparsity reduces computational cost
+* Moderate λ provides the best trade-off between accuracy and efficiency
+* Fine-tuning consistently recovers performance after pruning
+
+---
+
+## Visualization
+
+The project generates a comprehensive visualization including:
+
+* Training and test accuracy curves
+* Gate value distributions
+* Pruning impact on accuracy
+* Accuracy vs sparsity trade-off
+* MAC reduction comparison
+
+Visualization code: 
+
+---
+
+## How to Run
+
+```bash
+python main.py
+```
+
+Outputs:
+
+* Console logs with training progress
+* Summary table across experiments
+* Final visualization saved as `pruning_results.png`
 
 ---
 
 ## Project Structure
 
 ```
-├── model.py        # PrunableLinear and CNN architecture
-├── train.py        # Training, pruning, and fine-tuning pipeline
-├── utils.py        # Data loading, loss functions, metrics
-├── visualize.py    # Plots and analysis
-├── main.py         # Entry point
-└── report.md       # Detailed technical report
+main.py        → experiment orchestration
+model.py       → prunable layers and CNN model
+train.py       → training, pruning, fine-tuning pipeline
+utils.py       → loss functions, data loading, metrics
+visualize.py   → result plots
 ```
 
 ---
 
-## Setup
+## Key Contributions
 
-### Install dependencies
-
-```
-pip install torch torchvision matplotlib numpy
-```
-
-### Run training
-
-```
-python main.py
-```
+* End-to-end self-pruning neural network
+* Differentiable gating mechanism
+* Log-based sparsity loss for effective pruning
+* Curriculum-based sparsity scheduling
+* Complete training → pruning → fine-tuning pipeline
 
 ---
 
-## Device Support
+## Conclusion
 
-* CPU
-* CUDA (NVIDIA GPU)
-* Apple Silicon (MPS, with minor adjustments)
-
----
-
-## Limitations
-
-* Pruning is limited to fully connected layers
-* Unstructured sparsity may not fully translate to hardware speedups
-* Experiments are conducted on CIFAR-10 only
-
----
-
-## Future Work
-
-* Structured pruning (channel/filter-level)
-* Sparse inference optimization
-* Extension to larger datasets (e.g., ImageNet)
-* Exploration of binary or stochastic gating
-
----
-
-## Author
-
-Ranesh Prashar
+This project demonstrates that neural networks can learn to optimize their own structure during training. By integrating pruning into the learning process, the model achieves a balance between performance and efficiency without requiring a separate pruning stage.
 
 ---
 
